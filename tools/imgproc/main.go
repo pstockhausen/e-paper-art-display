@@ -44,6 +44,7 @@ import (
 	"bufio"
 	"bytes"
 	"compress/zlib"
+	"encoding/csv"
 	"flag"
 	"fmt"
 	"image"
@@ -54,6 +55,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -204,12 +206,17 @@ func main() {
 		stems[sourceStem(src)] = true
 	}
 
+	// Read art-fetcher CSV for metadata (optional - graceful if absent).
+	csvMeta := readArtfetcherCSV(filepath.Join("tools", "art-fetcher", "downloads", "manifest.csv"))
+
 	var packed []string
+	packedMeta := make(map[string]string) // bin name → "title|artist|year"
 	// Every frame name a current source owns, packed or not, so that a source
 	// which fails this run keeps its previous frame rather than losing it.
 	keep := make(map[string]bool, len(sources))
 	for _, src := range sources {
-		name := outputName(*out, sourceStem(src), stems, *randomPrefix, repackAll)
+		stem := sourceStem(src)
+		name := outputName(*out, stem, stems, *randomPrefix, repackAll)
 		keep[name] = true
 		dst := filepath.Join(*out, name)
 		previewPath := previewPathFor(src)
@@ -217,6 +224,8 @@ func main() {
 		if !repackAll && upToDate(src, dst, previewPath, cfg.writePreview) {
 			fmt.Printf("  %-44s up to date\n", filepath.Base(src))
 			packed = append(packed, name)
+			m := resolveMeta(stem, csvMeta)
+			packedMeta[name] = fmt.Sprintf("%s|%s|%s|%s", m.title, m.artist, m.year, m.movement)
 			continue
 		}
 
@@ -232,6 +241,8 @@ func main() {
 		}
 		fmt.Printf("  %-44s -> %s\n", filepath.Base(src), name)
 		packed = append(packed, name)
+		m := resolveMeta(stem, csvMeta)
+		packedMeta[name] = fmt.Sprintf("%s|%s|%s|%s", m.title, m.artist, m.year, m.movement)
 	}
 
 	if len(packed) == 0 {
@@ -242,6 +253,17 @@ func main() {
 	if err := writeManifest(manifest, packed, fingerprint); err != nil {
 		fatalf("writing %s: %v", manifest, err)
 	}
+
+	// Write meta.txt in the same sorted order as manifest.txt.
+	metaLines := make([]string, len(packed))
+	for i, name := range packed {
+		metaLines[i] = packedMeta[name]
+	}
+	metaPath := filepath.Join(*out, "meta.txt")
+	if err := writeMetaTxt(metaPath, metaLines); err != nil {
+		fatalf("writing %s: %v", metaPath, err)
+	}
+
 	removed, err := pruneFrames(*out, keep)
 	if err != nil {
 		fatalf("pruning %s: %v", *out, err)
@@ -741,4 +763,132 @@ func clampInt(v, lo, hi int) int {
 func fatalf(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, "imgproc: "+format+"\n", args...)
 	os.Exit(1)
+}
+
+// ---- Metadata helpers ------------------------------------------------------
+
+type artMeta struct{ title, artist, year, movement string }
+
+var (
+	numPrefixRe = regexp.MustCompile(`^\d+_`)
+	smallWords  = map[string]bool{
+		"a": true, "an": true, "the": true, "of": true, "in": true, "on": true,
+		"at": true, "by": true, "for": true, "with": true, "and": true, "or": true,
+		"but": true, "to": true, "from": true,
+	}
+)
+
+// unslugify converts "girl-with-a-pearl-earring" to "Girl with a Pearl Earring".
+func unslugify(s string) string {
+	words := strings.Split(s, "-")
+	for i, w := range words {
+		if w == "" {
+			continue
+		}
+		if i > 0 && smallWords[strings.ToLower(w)] {
+			words[i] = strings.ToLower(w)
+		} else {
+			words[i] = strings.ToUpper(w[:1]) + w[1:]
+		}
+	}
+	return strings.Join(words, " ")
+}
+
+// stemMeta derives title and artist by parsing a filename stem such as
+// "004_johannes-vermeer_girl-with-a-pearl-earring".
+func stemMeta(stem string) artMeta {
+	s := numPrefixRe.ReplaceAllString(stem, "") // strip leading "NNN_"
+	idx := strings.Index(s, "_")
+	if idx < 0 {
+		return artMeta{title: unslugify(s)}
+	}
+	return artMeta{
+		artist: unslugify(s[:idx]),
+		title:  unslugify(s[idx+1:]),
+	}
+}
+
+// readArtfetcherCSV reads tools/art-fetcher/downloads/manifest.csv and returns
+// a map from filename stem (without extension) to metadata.
+func readArtfetcherCSV(path string) map[string]artMeta {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+
+	r := csv.NewReader(f)
+	headers, err := r.Read()
+	if err != nil {
+		return nil
+	}
+	fileCol, artistCol, titleCol, yearCol, movementCol := -1, -1, -1, -1, -1
+	for i, h := range headers {
+		switch h {
+		case "file":
+			fileCol = i
+		case "artist":
+			artistCol = i
+		case "title":
+			titleCol = i
+		case "year":
+			yearCol = i
+		case "movement":
+			movementCol = i
+		}
+	}
+	if fileCol < 0 {
+		return nil
+	}
+
+	out := map[string]artMeta{}
+	for {
+		row, err := r.Read()
+		if err != nil {
+			break
+		}
+		if fileCol >= len(row) {
+			continue
+		}
+		stem := strings.TrimSuffix(row[fileCol], filepath.Ext(row[fileCol]))
+		m := artMeta{}
+		if artistCol >= 0 && artistCol < len(row) {
+			m.artist = row[artistCol]
+		}
+		if titleCol >= 0 && titleCol < len(row) {
+			m.title = row[titleCol]
+		}
+		if yearCol >= 0 && yearCol < len(row) {
+			m.year = row[yearCol]
+		}
+		if movementCol >= 0 && movementCol < len(row) {
+			m.movement = row[movementCol]
+		}
+		out[stem] = m
+	}
+	return out
+}
+
+// resolveMeta returns metadata for a source stem, preferring the art-fetcher
+// CSV over the filename slug.
+func resolveMeta(sourceStemVal string, csv map[string]artMeta) artMeta {
+	if csv != nil {
+		if m, ok := csv[sourceStemVal]; ok && (m.title != "" || m.artist != "") {
+			return m
+		}
+	}
+	return stemMeta(sourceStemVal)
+}
+
+// writeMetaTxt writes one "|"-separated line per image in the same order as
+// manifest.txt so the firmware can index both files by position.
+func writeMetaTxt(path string, lines []string) error {
+	var sb strings.Builder
+	sb.WriteString("# Generated by tools/imgproc - one metadata line per packed frame.\n")
+	sb.WriteString("# Format: title|artist|year  (same order as manifest.txt)\n")
+	for _, l := range lines {
+		sb.WriteString(l)
+		sb.WriteByte('\n')
+	}
+	return os.WriteFile(path, []byte(sb.String()), 0o644)
 }

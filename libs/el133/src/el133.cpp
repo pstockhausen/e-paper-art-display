@@ -83,7 +83,9 @@ void el133_begin()
     close_command();
     digitalWrite(EL133_PIN_RST, HIGH);
 
-    spi.begin(EL133_PIN_SCLK, EL133_PIN_MISO, EL133_PIN_MOSI, -1);
+    /* Pass -1 for MISO: the panel is write-only and GPIO23 is repurposed for
+     * the info display's D/C line (see src/info_display_pins.h). */
+    spi.begin(EL133_PIN_SCLK, -1, EL133_PIN_MOSI, -1);
 }
 
 /* ---- Init ------------------------------------------------------------- */
@@ -287,4 +289,9 @@ bool el133_refresh()
     delay(300);
 
     return ok;
+}
+
+SPIClass &el133_spi_bus()
+{
+    return spi;
 }

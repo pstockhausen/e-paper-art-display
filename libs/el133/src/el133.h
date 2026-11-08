@@ -86,6 +86,13 @@ void el133_stream_end();
  * asserted BUSY - it ignored the refresh - or never released it. */
 bool el133_refresh();
 
+/* The FSPI bus instance used by this driver.  Other SPI devices (e.g. the
+ * info display) may share it by calling beginTransaction() / endTransaction()
+ * around every transfer, and must never hold CS asserted while the main
+ * panel may be active. */
+#include <SPI.h>
+SPIClass &el133_spi_bus();
+
 /* ---- Overlay ----------------------------------------------------------
  *
  * A rectangle painted over a frame as it streams through - a status line, say -

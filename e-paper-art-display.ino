@@ -29,6 +29,10 @@
 #include "src/setup_wifi.h"
 #include "src/status_line.h"
 
+#if ENABLE_INFO_DISPLAY
+#include "src/info_display.h"
+#endif
+
 #if !defined(ART_BASE_URL) || !defined(ART_AUTH_TOKEN)
 #error "src/secrets.h needs ART_BASE_URL and ART_AUTH_TOKEN: copy them from src/secrets_template.h"
 #endif
@@ -289,6 +293,10 @@ void setup()
 
   el133_begin();
 
+#if ENABLE_INFO_DISPLAY
+  info_display_begin();
+#endif
+
   /* Check the cell before doing anything expensive. A refresh is ~35 s of the
    * panel's boost converters at full tilt; browning out during one leaves a
    * half-written frame on the glass. */
@@ -353,6 +361,14 @@ void setup()
     return;
   }
 
+#if ENABLE_INFO_DISPLAY
+  /* Fetch artwork metadata (title, artist, year) from meta.txt while WiFi is
+   * still up.  A missing meta.txt is not an error - the info display falls
+   * back to parsing the filename. */
+  ArtworkMeta artwork_meta = {};
+  artfeed_fetch_meta(cfg, position, artwork_meta);
+#endif
+
   /* The refresh is the heaviest load in the whole cycle, so bracket it with
    * battery readings: a big drop across these two lines points at the supply
    * rather than at the panel or the download. */
@@ -386,6 +402,10 @@ void setup()
 
   battery_log();
   Log.notice("Showing \"%s\"" CR, name);
+
+#if ENABLE_INFO_DISPLAY
+  info_display_show(artwork_meta, name);
+#endif
 
   if (DAILY_UPDATE)
   {

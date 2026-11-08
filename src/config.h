@@ -48,4 +48,10 @@
 #define LOG_LEVEL LOG_LEVEL_NOTICE
 #endif
 
+// ===== Info Display =====
+// Set to true to enable the Waveshare 2.9" V2 caption display.
+// Requires the display wired as described in src/info_display_pins.h.
+// When false, all info_display code is compiled out.
+#define ENABLE_INFO_DISPLAY true
+
 #endif

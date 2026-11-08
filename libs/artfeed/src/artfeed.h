@@ -82,3 +82,24 @@ struct ArtfeedError
 };
 
 const ArtfeedError &artfeed_last_error();
+
+/* ---- Artwork metadata ---------------------------------------------------- */
+
+/* Title, artist and year for the currently displayed image.
+ * These are fetched from a companion meta.txt file that imgproc generates
+ * alongside manifest.txt.  All fields are empty strings if meta.txt does not
+ * exist or the entry is missing; the info display falls back to the filename. */
+struct ArtworkMeta
+{
+    char title[128];
+    char artist[64];
+    char year[8];
+    char movement[64]; /* art movement/epoch, e.g. "Baroque" (empty if unknown) */
+};
+
+/* Fetch meta.txt and parse the entry at the given 1-based position (the same
+ * index returned by artfeed_pick()).  Returns true if the line was found and
+ * parsed.  Returns false gracefully if meta.txt is absent (404) or malformed;
+ * the caller should still proceed and show whatever the info display can
+ * derive from the filename.  WiFi must be up when this is called. */
+bool artfeed_fetch_meta(const ArtfeedConfig &cfg, uint32_t position, ArtworkMeta &meta);

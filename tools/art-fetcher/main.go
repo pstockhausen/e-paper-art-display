@@ -105,9 +105,9 @@ type imageInfo struct {
 
 type work struct {
 	imageInfo
-	qid, title, file, year string
-	sitelinks              int
-	artist, group          string
+	qid, title, file, year, movement string
+	sitelinks                         int
+	artist, group                     string
 }
 
 // HTTP
@@ -267,10 +267,16 @@ func resolveArtist(name string) (qid, label string, died int, err error) {
 
 func worksBy(qid string) ([]work, error) {
 	q := fmt.Sprintf(`
-SELECT ?item ?itemLabel ?image ?inception ?sl (GROUP_CONCAT(DISTINCT ?type; separator=",") AS ?types) WHERE {
+SELECT ?item ?itemLabel ?image ?inception ?sl
+  (GROUP_CONCAT(DISTINCT ?type; separator=",") AS ?types)
+  (GROUP_CONCAT(DISTINCT ?mvLabel; separator="|") AS ?movements)
+WHERE {
   ?item wdt:P170 wd:%s ; wdt:P18 ?image ; wikibase:sitelinks ?sl .
   OPTIONAL { ?item wdt:P571 ?inception . }
   OPTIONAL { ?item wdt:P31 ?type . }
+  OPTIONAL { ?item wdt:P135 ?mv .
+             ?mv rdfs:label ?mvLabel .
+             FILTER(LANG(?mvLabel) = "en") }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "en,de,fr,nl,it,ja,ru". }
 }
 GROUP BY ?item ?itemLabel ?image ?inception ?sl`, qid)
@@ -306,13 +312,17 @@ GROUP BY ?item ?itemLabel ?image ?inception ?sl`, qid)
 		if m := yearRe.FindStringSubmatch(r["inception"].Value); m != nil {
 			year = m[1]
 		}
+		movement := ""
+		if mv := r["movements"].Value; mv != "" {
+			movement, _, _ = strings.Cut(mv, "|") // take first if multiple
+		}
 		title := r["itemLabel"].Value
 		if qidRe.MatchString(title) {
 			title = strings.TrimSuffix(file, filepath.Ext(file))
 		}
 		sl, _ := strconv.Atoi(r["sl"].Value)
 		seen[item] = true
-		works = append(works, work{qid: item, title: title, file: file, year: year, sitelinks: sl})
+		works = append(works, work{qid: item, title: title, file: file, year: year, movement: movement, sitelinks: sl})
 	}
 	return works, nil
 }
@@ -561,7 +571,7 @@ func run(selected []work, dir string, dryRun bool) error {
 		owner[f] = u
 	}
 
-	rows := [][]string{{"file", "artist", "title", "year", "group", "width", "height", "wikidata", "commons_page", "source_url"}}
+	rows := [][]string{{"file", "artist", "title", "year", "group", "width", "height", "wikidata", "commons_page", "source_url", "movement"}}
 	var failed []string
 	var got, had int
 	for i, w := range selected {
@@ -574,7 +584,7 @@ func run(selected []work, dir string, dryRun bool) error {
 		name, have := localName(dir, n, w, src, ext, prev, owner)
 		row := []string{
 			name, w.artist, w.title, w.year, w.group, strconv.Itoa(w.Width), strconv.Itoa(w.Height),
-			"https://www.wikidata.org/wiki/" + w.qid, w.Page, src,
+			"https://www.wikidata.org/wiki/" + w.qid, w.Page, src, w.movement,
 		}
 		switch {
 		case dryRun:

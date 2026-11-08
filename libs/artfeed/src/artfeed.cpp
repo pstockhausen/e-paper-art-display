@@ -420,3 +420,85 @@ bool artfeed_show(const ArtfeedConfig &cfg, const char *name)
     }
     return true;
 }
+
+/* ---- Meta ---------------------------------------------------------------- */
+
+bool artfeed_fetch_meta(const ArtfeedConfig &cfg, uint32_t position, ArtworkMeta &meta)
+{
+    meta = {};
+
+    String url = String(cfg.base_url) + "meta.txt";
+
+    NetworkClientSecure client;
+    HTTPClient http;
+    artfeed_prepare(cfg, client, http);
+
+    if (!artfeed_begin(cfg, client, http, url))
+        return false;
+
+    int code = http.GET();
+    if (code != HTTP_CODE_OK)
+    {
+        http.end();
+        if (code == HTTP_CODE_NOT_FOUND)
+            Log.notice("meta.txt not found, info display will use filename" CR);
+        else
+            Log.warning("meta.txt GET returned %d, info display will use filename" CR, code);
+        return false;
+    }
+
+    String body = http.getString();
+    http.end();
+
+    /* Locate the target line (1-based position → 0-based index). */
+    uint32_t target = position > 0 ? position - 1 : 0;
+    int start = 0;
+    for (uint32_t i = 0; i < target; i++)
+    {
+        int nl = body.indexOf('\n', start);
+        if (nl < 0)
+        {
+            Log.warning("meta.txt has fewer lines than expected" CR);
+            return false;
+        }
+        start = nl + 1;
+    }
+
+    int end = body.indexOf('\n', start);
+    if (end < 0)
+        end = (int)body.length();
+
+    String line = body.substring(start, end);
+    line.trim();
+    if (line.length() == 0)
+        return false;
+
+    int p1 = line.indexOf('|');
+    if (p1 < 0)
+    {
+        strlcpy(meta.title, line.c_str(), sizeof(meta.title));
+        return true;
+    }
+    strlcpy(meta.title, line.substring(0, p1).c_str(), sizeof(meta.title));
+
+    int p2 = line.indexOf('|', p1 + 1);
+    if (p2 < 0)
+    {
+        strlcpy(meta.artist, line.substring(p1 + 1).c_str(), sizeof(meta.artist));
+        return true;
+    }
+    strlcpy(meta.artist, line.substring(p1 + 1, p2).c_str(), sizeof(meta.artist));
+
+    int p3 = line.indexOf('|', p2 + 1);
+    if (p3 < 0)
+    {
+        strlcpy(meta.year, line.substring(p2 + 1).c_str(), sizeof(meta.year));
+        Log.notice("Meta: \"%s\" by %s (%s)" CR, meta.title, meta.artist, meta.year);
+        return true;
+    }
+    strlcpy(meta.year,     line.substring(p2 + 1, p3).c_str(), sizeof(meta.year));
+    strlcpy(meta.movement, line.substring(p3 + 1).c_str(),     sizeof(meta.movement));
+
+    Log.notice("Meta: \"%s\" by %s (%s) [%s]" CR, meta.title, meta.artist, meta.year, meta.movement);
+    return true;
+}
